@@ -8,7 +8,8 @@
 import {ai} from '@/ai/genkit';
 import {z} from 'genkit';
 import {
-  GroupedTopicSuggestionSchema
+  GroupedTopicSuggestionSchema,
+  TopicSuggestion,
 } from '@/ai/schemas';
 import { googleAI } from '@genkit-ai/googleai';
 
@@ -34,12 +35,14 @@ const prompt = ai.definePrompt({
   name: 'generateSuggestionsPrompt',
   input: {schema: GenerateSuggestionsInputSchema},
   output: {schema: GenerateSuggestionsOutputSchema},
-  model: googleAI.model('gemini-1.5-flash'),
+  model: googleAI.model('gemini-2.5-flash-lite'),
   system: `Based on all reviews, provide a list of the most critical, actionable suggestions for improvement. 
   
-  IMPORTANT: You MUST group all suggestions for the same topic into a single object with a 'suggestions' array. Do not create duplicate entries for the same topic.
+For each topic, you MUST synthesize the feedback into only 1 or 2 unique, high-impact suggestions. DO NOT list every possible suggestion.
+
+IMPORTANT: You MUST group all suggestions for the same topic into a single object with a 'suggestions' array. Do not create duplicate entries for the same topic.
   
-  If no suggestions can be derived from the reviews, you MUST return an empty array.`,
+If no suggestions can be derived from the reviews, you MUST return an empty array.`,
   prompt: `
 Reviews to analyze:
 {{#each reviews}}
@@ -56,11 +59,32 @@ const generateSuggestionsFlow = ai.defineFlow(
   },
   async (input) => {
     const {output} = await prompt(input);
-    if (!output) {
+    if (!output || !Array.isArray(output.suggestions)) {
       throw new Error('The AI model failed to return valid suggestions.');
     }
+
+    // Post-process to merge suggestions for the same topic
+    const suggestionsMap = new Map<string, string[]>();
+
+    output.suggestions.forEach(item => {
+      // Validate that the item has both topic and suggestions array
+      const parsed = GroupedTopicSuggestionSchema.safeParse(item);
+      if (parsed.success) {
+        const { topic, suggestions } = parsed.data;
+        if (!suggestionsMap.has(topic)) {
+          suggestionsMap.set(topic, []);
+        }
+        suggestionsMap.get(topic)!.push(...suggestions);
+      }
+    });
+
+    const groupedSuggestions = Array.from(suggestionsMap.entries()).map(([topic, suggestions]) => ({
+      topic: topic as TopicSuggestion['topic'],
+      suggestions: suggestions,
+    }));
+    
     return {
-        suggestions: output.suggestions || []
+        suggestions: groupedSuggestions,
     };
   }
 );

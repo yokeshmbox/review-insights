@@ -33,7 +33,7 @@ const prompt = ai.definePrompt({
   name: 'generateTopicAnalysisPrompt',
   input: {schema: GenerateTopicAnalysisInputSchema},
   output: {schema: GenerateTopicAnalysisOutputSchema},
-  model: googleAI.model('gemini-1.5-flash'),
+  model: googleAI.model('gemini-2.5-flash-lite'),
   system: `You are an expert hospitality analyst. The user will provide reviews, potentially grouped by topic.
 For EACH topic ('Reservation', 'Management Service', 'Food', 'Payment', 'Other'), you MUST perform the following steps based *only* on the reviews provided for that specific topic:
 1.  Derive the topic name.

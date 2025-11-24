@@ -30,7 +30,7 @@ const prompt = ai.definePrompt({
   name: 'generateSummaryPrompt',
   input: {schema: GenerateSummaryInputSchema},
   output: {schema: GenerateSummaryOutputSchema},
-  model: googleAI.model('gemini-1.5-flash'),
+  model: googleAI.model('gemini-2.5-flash-lite'),
   system: `You are an expert hospitality analyst. Based on the provided reviews, generate:
 1.  A concise summary (2-3 sentences) of the overall sentiment.
 2.  A bulleted list of the main positive points. If there are no clear positive points, you MUST return an empty string.`,

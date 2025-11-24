@@ -1,12 +1,10 @@
 import {genkit} from 'genkit';
 import {googleAI} from '@genkit-ai/googleai';
-import {z} from 'zod';
 
 export const ai = genkit({
   plugins: [
     googleAI({
-      apiVersion: 'v1beta',
-      apiKey: "AIzaSyBE-ylW8NcRr-dsGqUG3XZlHrMLiMyxcHc",
+      apiKey: "AIzaSyALXFB3NRuEcPxYqkfbrJ6UVEnCY0m4Img",
     }),
   ],
   logLevel: 'debug',

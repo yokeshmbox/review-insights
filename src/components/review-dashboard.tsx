@@ -6,7 +6,7 @@ import * as XLSX from 'xlsx';
 import { FileUploader } from '@/components/file-uploader';
 import { SentimentSummaryCard } from '@/components/sentiment-summary-card';
 import { ReviewsListCard } from '@/components/reviews-list-card';
-import { Loader2, BrainCircuit, Sparkles, FileCheck2, BarChartBig, Upload } from 'lucide-react';
+import { Loader2, BrainCircuit, Sparkles, FileCheck2, BarChartBig, Upload, Download } from 'lucide-react';
 import { useToast } from "@/hooks/use-toast";
 import { KeyPositivesCard } from './key-positives-card';
 import { SentimentDistributionCard } from './sentiment-distribution-card';
@@ -17,15 +17,15 @@ import { SentimentTrendCard, type SentimentTrendData } from './sentiment-trend-c
 import { DetailedFeedbackCard } from './detailed-feedback-card';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { parse } from 'date-fns';
+import { parse, format } from 'date-fns';
 import { analyzeReviews } from '@/ai/flows/analyze-reviews-flow';
 import { generateSummary } from '@/ai/flows/generate-summary-flow';
 import { generateSuggestions } from '@/ai/flows/generate-suggestions-flow';
 import { generateTopicAnalysis } from '@/ai/flows/generate-topic-analysis-flow';
 
 import type { AnalyzedReview, GroupedTopicSuggestion, TopicCategory, RatingCategory, TopicAnalysis } from '@/ai/schemas';
-import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { ThemeToggle } from './theme-toggle';
+import { QAndACard } from './q-and-a-card';
 
 export interface Review extends Omit<AnalyzedReview, 'rating' | 'topic'> {
   rating: number;
@@ -49,7 +49,21 @@ export interface DetailedTopicAnalysis {
     analysis: TopicAnalysis;
 }
 
+interface ExportedDashboardData {
+    reviews: Review[];
+    consolidatedReviewData: ConsolidatedReviewData;
+    sentimentTrend: SentimentTrendData[];
+    detailedAnalysis: DetailedTopicAnalysis[];
+}
+
+interface SurveyRecord {
+    id: string;
+    surveyResponses: Record<string, string | number>;
+    createTime: string;
+}
+
 const ALL_TOPICS: TopicCategory[] = ['Reservation', 'Management Service', 'Food', 'Payment', 'Other'];
+const REVIEW_BATCH_SIZE = 50; // Process 50 reviews at a time
 
 const RATING_MAP: Record<RatingCategory, number> = {
   'BEST': 5,
@@ -69,14 +83,40 @@ export function ReviewDashboard() {
   const [loadingMessage, setLoadingMessage] = useState("Let's turn your data into delight ✨");
   const [loadingSubMessage, setLoadingSubMessage] = useState("Just a moment, we're firing up the AI to analyze your reviews!");
 
-  const processReviews = async (items: {id: number, text: string, month: string}[]) => {
-      
-      const reviewTexts = items.map(item => item.text);
+  const processReviews = async (items: {id: number, text: string, month: string, rating?: number}[]) => {
       
       try {
         setLoadingMessage("Connecting with your customers...");
-        setLoadingSubMessage("Our AI is carefully reading every review to understand the real story.");
-        const analyzedReviewsPromise = analyzeReviews({ reviews: reviewTexts });
+        setLoadingSubMessage(`Reading ${items.length} reviews. This may take a moment...`);
+
+        // Batch processing for the initial analysis
+        const reviewBatches = [];
+        for (let i = 0; i < items.length; i += REVIEW_BATCH_SIZE) {
+            reviewBatches.push(items.slice(i, i + REVIEW_BATCH_SIZE));
+        }
+
+        let analyzedReviewsFromAI: AnalyzedReview[] = [];
+        for (let i = 0; i < reviewBatches.length; i++) {
+            const batch = reviewBatches[i];
+            const reviewTexts = batch.map(item => item.text);
+            
+            setLoadingSubMessage(`Analyzing review batch ${i + 1} of ${reviewBatches.length}...`);
+
+            const result = await analyzeReviews({ reviews: reviewTexts });
+
+            if (result && result.analyzedReviews) {
+                // Re-map original IDs from the batch
+                const mappedReviews = result.analyzedReviews.map(ar => {
+                    const originalItem = batch.find(item => item.id % REVIEW_BATCH_SIZE === ar.id);
+                    // Ensure a unique key, even if the ID is duplicated or -1
+                    const uniqueId = originalItem ? originalItem.id : `${ar.id}-${Math.random()}`;
+                    return { ...ar, id: uniqueId };
+                });
+                analyzedReviewsFromAI.push(...mappedReviews);
+            }
+        }
+        
+        const reviewTexts = items.map(item => item.text);
 
         setLoadingMessage('Finding the story in the data...');
         setLoadingSubMessage('Weaving together feedback to see the big picture for you.');
@@ -86,22 +126,22 @@ export function ReviewDashboard() {
         setLoadingSubMessage("We're turning insights into your next steps for success.");
         const suggestionsPromise = generateSuggestions({ reviews: reviewTexts });
 
-        const [analyzedReviewsResult, summaryResult, suggestionsResult] = await Promise.all([
-          analyzedReviewsPromise,
+        const [summaryResult, suggestionsResult] = await Promise.all([
           summaryPromise,
           suggestionsPromise,
         ]);
 
-        if (!analyzedReviewsResult || !summaryResult || !suggestionsResult) {
+        if (!summaryResult || !suggestionsResult) {
             throw new Error("The AI model failed to return a valid analysis for the reviews.");
         }
         
-        const allAnalyzedReviews = (analyzedReviewsResult.analyzedReviews || []).map((ar, index) => {
+        const allAnalyzedReviews = (analyzedReviewsFromAI || []).map((ar) => {
           const originalItem = items.find(item => item.id === ar.id);
           return {
               ...ar,
               topic: ar.topic || 'Other',
-              rating: RATING_MAP[ar.sentiment] || 3,
+              // Use the explicit rating from survey if available, otherwise use AI-inferred rating.
+              rating: originalItem?.rating ?? (RATING_MAP[ar.sentiment] || 3),
               id: ar.id,
               month: originalItem?.month || ''
           } as Review;
@@ -188,7 +228,7 @@ export function ReviewDashboard() {
         toast({
           variant: "destructive",
           title: "An error occurred",
-          description: e.message || "Failed to analyze the reviews.",
+          description: e.message || "Failed to analyze the reviews. The request may have timed out. Please try a smaller file.",
         });
         resetState();
       }
@@ -199,10 +239,121 @@ export function ReviewDashboard() {
       const totalRating = reviews.reduce((sum, review) => sum + review.rating, 0);
       return totalRating / reviews.length;
   };
+  
+  const handleSurveyFileUpload = async (file: File) => {
+    setIsLoading(true);
+    resetState(true);
+
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+        try {
+            const text = e.target?.result;
+            if (typeof text !== 'string') {
+                throw new Error('File could not be read.');
+            }
+            const json: SurveyRecord[] = JSON.parse(text);
+
+            if (!Array.isArray(json) || json.length === 0) {
+                throw new Error('Invalid survey file format. Expected a JSON array.');
+            }
+            
+            const parsedData = json.map((record, index) => {
+                let rating: number | null = null;
+                const textParts: string[] = [];
+                
+                if (record.surveyResponses) {
+                    for (const [question, answer] of Object.entries(record.surveyResponses)) {
+                        // Check if the question is a rating question
+                        if (question.toLowerCase().includes('rate') && typeof answer === 'number') {
+                            rating = answer;
+                        } else if (typeof answer === 'string' && answer.trim() !== '') {
+                            // Combine other questions and answers into the review text, excluding the question itself
+                            textParts.push(String(answer));
+                        }
+                    }
+                }
+                
+                const date = new Date(record.createTime);
+                const month = format(date, 'MMM');
+                
+                return {
+                    id: index,
+                    text: textParts.join('. '),
+                    month: month,
+                    rating: rating,
+                };
+            }).filter(item => item.text.trim() !== '' || item.rating !== null);
+
+
+            if (parsedData.length === 0) {
+                toast({
+                    variant: "destructive",
+                    title: "No Valid Surveys Found",
+                    description: "The file doesn't seem to contain valid survey data in the expected format.",
+                });
+                resetState();
+                return;
+            }
+
+            await processReviews(parsedData as any);
+        } catch (err: any) {
+            console.error("Error processing survey file:", err);
+            toast({
+                variant: "destructive",
+                title: "Error Processing Survey File",
+                description: err.message || "Please ensure the file is a valid JSON file with the correct survey format.",
+            });
+            resetState();
+        } finally {
+            setIsLoading(false);
+        }
+    };
+    reader.readAsText(file);
+  };
 
   const handleFileUpload = async (file: File) => {
     setIsLoading(true);
     resetState(true);
+
+    // Handle JSON analysis file
+    if (file.type === 'application/json' || file.name.endsWith('.json')) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try {
+                const text = e.target?.result;
+                if (typeof text !== 'string') {
+                    throw new Error('File could not be read.');
+                }
+                const data: ExportedDashboardData = JSON.parse(text);
+
+                // Validate loaded data
+                if (!data.reviews || !data.consolidatedReviewData || !data.sentimentTrend || !data.detailedAnalysis) {
+                   throw new Error('Invalid analysis file format.');
+                }
+                
+                setReviews(data.reviews);
+                setConsolidatedReviewData(data.consolidatedReviewData);
+                setSentimentTrend(data.sentimentTrend);
+                setDetailedAnalysis(data.detailedAnalysis);
+                toast({
+                    title: "Analysis Loaded",
+                    description: "Successfully loaded previous analysis from file.",
+                });
+            } catch (err: any) {
+                console.error(err);
+                toast({
+                    variant: "destructive",
+                    title: "Failed to load analysis file",
+                    description: err.message || "The file may be corrupt or in the wrong format.",
+                });
+                resetState();
+            } finally {
+                setIsLoading(false);
+            }
+        };
+        reader.readAsText(file);
+        return;
+    }
 
     try {
       const data = await file.arrayBuffer();
@@ -211,6 +362,9 @@ export function ReviewDashboard() {
       const worksheet = workbook.Sheets[worksheetName];
       const json: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
 
+      // Regex to allow English alphanumeric characters, common punctuation, and currency symbols.
+      const englishRegex = /^[a-zA-Z0-9\s.,'!?$€£%&()\-]*$/;
+
       const parsedData = json
         .slice(1) // Ignore the first row (headings)
         .map((row, index) => ({
@@ -218,13 +372,17 @@ export function ReviewDashboard() {
             text: String(row[0] || ''),
             month: String(row[1] || ''),
         }))
-        .filter(item => item.text.trim() !== '' && item.month.trim() !== '');
+        .filter(item => 
+            item.text.trim() !== '' && 
+            item.month.trim() !== '' &&
+            englishRegex.test(item.text)
+        );
 
       if (parsedData.length === 0) {
         toast({
           variant: "destructive",
-          title: "Invalid File",
-          description: "No valid reviews found. Ensure the first column has review text and the second has the month.",
+          title: "No Valid Reviews Found",
+          description: "No processable reviews could be found. Please ensure the file contains valid, English-language reviews and dates.",
         });
         resetState();
         return;
@@ -351,11 +509,38 @@ export function ReviewDashboard() {
     setLoadingSubMessage("Just a moment, we're firing up the AI to analyze your reviews!");
   };
 
+  const handleExport = () => {
+    if (!consolidatedReviewData) return;
+
+    const exportData: ExportedDashboardData = {
+        reviews,
+        consolidatedReviewData,
+        sentimentTrend,
+        detailedAnalysis
+    };
+
+    const dataStr = JSON.stringify(exportData, null, 2);
+    const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
+
+    const exportFileDefaultName = 'hospitality-pulse-analysis.json';
+
+    let linkElement = document.createElement('a');
+    linkElement.setAttribute('href', dataUri);
+    linkElement.setAttribute('download', exportFileDefaultName);
+    linkElement.click();
+    linkElement.remove();
+
+    toast({
+        title: "Export Successful",
+        description: "Your dashboard analysis has been downloaded.",
+    });
+  };
+
   const featureCards = [
     {
       icon: <FileCheck2 className="h-8 w-8 text-primary" />,
       title: "Upload Your Data",
-      description: "Simply upload your customer reviews in an Excel or CSV file.",
+      description: "Upload reviews from an Excel/CSV file, or a previous analysis JSON file.",
     },
     {
       icon: <Sparkles className="h-8 w-8 text-primary" />,
@@ -372,21 +557,8 @@ export function ReviewDashboard() {
   return (
     <div className="container mx-auto max-w-7xl space-y-12 py-12 px-4">
       <header className="relative text-center">
-        <div className="absolute top-0 right-0 flex flex-col items-end gap-2">
+        <div className="absolute top-0 right-0">
             <ThemeToggle />
-            {!isLoading && reviews.length > 0 && (
-                <Tooltip>
-                    <TooltipTrigger asChild>
-                    <Button variant="outline" size="icon" onClick={() => resetState()}>
-                        <Upload />
-                        <span className="sr-only">New Analysis</span>
-                    </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                    <p>New Analysis</p>
-                    </TooltipContent>
-                </Tooltip>
-            )}
         </div>
         <div className="flex flex-col items-center">
             <div className="flex items-center gap-3">
@@ -423,12 +595,24 @@ export function ReviewDashboard() {
                     ))}
                 </div>
             </div>
-            <FileUploader onFileUpload={handleFileUpload} onTest={handleTestData} />
+            <FileUploader onFileUpload={handleFileUpload} onSurveyUpload={handleSurveyFileUpload} onTest={handleTestData} />
         </div>
       )}
       
       {!isLoading && reviews.length > 0 && consolidatedReviewData && (
         <div className="space-y-8 animate-in fade-in duration-500">
+            {/* Dashboard Actions */}
+            <div className="flex items-center justify-end gap-4">
+                <Button onClick={handleExport}>
+                    <Download className="mr-2 h-4 w-4" />
+                    Export Analysis
+                </Button>
+                <Button variant="outline" onClick={() => resetState()}>
+                    <Upload className="mr-2 h-4 w-4" />
+                    New Analysis
+                </Button>
+            </div>
+
             {/* 1. Analysis Summary */}
             <SentimentSummaryCard reviews={reviews} consolidatedRating={consolidatedReviewData.overallRating} />
             
@@ -452,12 +636,12 @@ export function ReviewDashboard() {
             {detailedAnalysis.length > 0 && <DetailedFeedbackCard analysis={detailedAnalysis} totalReviewCount={reviews.length} />}
 
             <ReviewsListCard reviews={reviews} />
+
+            <QAndACard reviews={reviews} />
         </div>
       )}
     </div>
   );
 }
 
-    
-    
     

@@ -34,7 +34,7 @@ const prompt = ai.definePrompt({
   name: 'analyzeReviewsPrompt',
   input: {schema: AnalyzeReviewsInputSchema},
   output: {schema: AnalyzeReviewsOutputSchema},
-  model: googleAI.model('gemini-1.5-flash'),
+  model: googleAI.model('gemini-2.5-flash-lite'),
   system: `You are an expert hospitality analyst. Your task is to analyze a BATCH of customer reviews for a hotel.
 
 For EACH review in the batch, you must:
